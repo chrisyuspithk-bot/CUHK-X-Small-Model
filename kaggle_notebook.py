@@ -1,16 +1,28 @@
 """
-CUHK-X Small Model Track — Kaggle Training & Inference Notebook
+CUHK-X Small Model Track — Standalone Kaggle Notebook
 
-Copy each CELL into a separate Kaggle notebook cell and run in order.
+Fully self-contained: downloads data from HuggingFace, trains, and submits.
+No data mounting needed — just run the 9 cells in order.
+
+Cells:
+  1: pip install all dependencies
+  2: Imports & hyperparameters
+  3: Download data from HuggingFace (~41.5 GB, ~20 min)
+  4: Dataset & preprocessing
+  5: Model architecture
+  6: Training functions
+  7: Run training (6-fold GroupKFold CV)
+  8: Inference function
+  9: Generate submission.csv
 """
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  CELL 1 of 9: Install dependencies                          ║
 # ╚══════════════════════════════════════════════════════════════╝
-!pip install -q torch torchvision numpy pandas scikit-learn Pillow tqdm
+!pip install -q torch torchvision numpy pandas scikit-learn Pillow tqdm huggingface_hub
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  CELL 2 of 9: Imports, paths, hyperparameters               ║
+# ║  CELL 2 of 9: Imports & Hyperparameters                     ║
 # ╚══════════════════════════════════════════════════════════════╝
 import csv
 import json
@@ -28,119 +40,6 @@ import torch.optim as optim
 from PIL import Image
 from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader, Dataset
-
-# ── Paths (Kaggle auto-mounts the competition data) ──
-# On Kaggle, competitions mount directly under /kaggle/input/<competition-name>/
-# The directory name may vary — auto-detect it below.
-import glob as _glob
-import subprocess
-
-def _find_kaggle_input():
-    """Auto-detect the Kaggle competition input directory."""
-    for pattern in [
-        "/kaggle/input/cuhk-x-competition-small-model-track",
-        "/kaggle/input/competitions/cuhk-x-competition-small-model-track",
-    ]:
-        if os.path.isdir(pattern):
-            return pattern
-    for d in _glob.glob("/kaggle/input/*"):
-        if "cuhk" in d.lower() or "small" in d.lower():
-            return d
-    return None
-
-def _find_files_recursive(base_dir, pattern, max_depth=5):
-    """Walk directory tree to find files matching pattern."""
-    matches = []
-    for root, dirs, files in os.walk(base_dir):
-        depth = root.replace(base_dir, "").count(os.sep)
-        if depth > max_depth:
-            dirs.clear()  # don't go deeper
-            continue
-        for f in files:
-            if pattern in f or f.endswith(pattern):
-                matches.append(os.path.join(root, f))
-    return sorted(matches)
-
-# ── Phase 1: Find Kaggle input ──
-KAGGLE_INPUT = _find_kaggle_input()
-if KAGGLE_INPUT is None:
-    raise SystemExit(
-        "Cannot find CUHK-X data. Is this notebook attached to the competition?\n"
-        "Go to: Notebook sidebar → Data → Add Input → Competitions → CUHK-X Small Model Track"
-    )
-print(f"KAGGLE_INPUT = {KAGGLE_INPUT}")
-
-# ── Phase 2: Show everything in the input directory ──
-print(f"\nFull directory tree of {KAGGLE_INPUT}:")
-# Use `tree` if available, else manual listing
-try:
-    subprocess.run(["tree", "-L", "3", "--du", "-h", KAGGLE_INPUT], timeout=10)
-except:
-    def _show_tree(path, prefix="", max_depth=3):
-        if max_depth <= 0: return
-        try:
-            entries = sorted(os.listdir(path))
-        except PermissionError:
-            return
-        for i, e in enumerate(entries):
-            full = os.path.join(path, e)
-            is_last = (i == len(entries)-1)
-            marker = "└── " if is_last else "├── "
-            if os.path.isdir(full):
-                try: sz = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, files in os.walk(full) for f in files) / 1e9
-                except: sz = 0
-                print(f"{prefix}{marker}{e}/ ({sz:.1f} GB)")
-                _show_tree(full, prefix + ("    " if is_last else "│   "), max_depth-1)
-            else:
-                sz = os.path.getsize(full) / 1e9
-                print(f"{prefix}{marker}{e} ({sz:.1f} GB)")
-    _show_tree(KAGGLE_INPUT)
-
-# ── Phase 3: Find zip volumes, test data, and test CSV ──
-print("\n── Searching for data files ──")
-
-HAR_ZIPS = [f for f in _find_files_recursive(KAGGLE_INPUT, "HAR.z")
-            if f.endswith(('.z01','.z02','.z03','.z04','.z05','.z06','.z07','.z08','.zip'))]
-# Also include the final HAR.zip
-har_zip = _find_files_recursive(KAGGLE_INPUT, "HAR.zip")
-HAR_ZIPS = sorted(set(HAR_ZIPS + har_zip))
-
-if HAR_ZIPS:
-    TRAIN_DATA_DIR = os.path.dirname(HAR_ZIPS[0])
-    print(f"Found {len(HAR_ZIPS)} training zip volumes in: {TRAIN_DATA_DIR}")
-else:
-    TRAIN_DATA_DIR = f"{KAGGLE_INPUT}/Training/data"
-    print(f"No zip volumes found, assuming: {TRAIN_DATA_DIR}")
-
-TRAIN_ROOT = f"{TRAIN_DATA_DIR}/HAR/data"  # after extraction
-
-# Find test data
-test_zips = _find_files_recursive(KAGGLE_INPUT, "small_model_track_test")
-test_dirs = [d for d in test_zips if os.path.isdir(d)]
-test_zips = [d for d in test_zips if d.endswith('.zip')]
-
-if test_dirs:
-    TEST_ROOT = test_dirs[0]
-    print(f"Found pre-extracted test dir: {TEST_ROOT}")
-elif test_zips:
-    TEST_ROOT = os.path.join(os.path.dirname(test_zips[0]), "small_model_track_test")
-    print(f"Found test zip: {test_zips[0]} → will extract to {TEST_ROOT}")
-else:
-    TEST_ROOT = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test"
-    print(f"No test data found, assuming: {TEST_ROOT}")
-
-# Find test.csv
-test_csvs = _find_files_recursive(KAGGLE_INPUT, "test.csv")
-if test_csvs:
-    # prefer the one in Testing/test_file/
-    preferred = [c for c in test_csvs if "Testing" in c or "test_file" in c]
-    TEST_CSV = (preferred or test_csvs)[0]
-    print(f"Found test.csv at: {TEST_CSV}")
-else:
-    TEST_CSV = f"{KAGGLE_INPUT}/Testing/test_file/test.csv"
-    print(f"No test.csv found, assuming: {TEST_CSV}")
-
-OUTPUT_DIR = "/kaggle/working"
 
 # ── Hyperparameters ──
 NUM_CLASSES   = 40
@@ -160,89 +59,107 @@ MODALITIES     = ["Depth_Color", "IR", "Thermal", "IMU", "Radar", "Skeleton"]
 IMU_FEATURES   = ["AccX","AccY","AccZ","AsX","AsY","AsZ","AngleX","AngleY","AngleZ"]
 SENSOR_ORDER   = ["WTC", "WTRA", "WTLA", "WTLL", "WTRL"]
 
+# Placeholders — Cell 3 will set the real paths after downloading
+TRAIN_ROOT = "/kaggle/working/data/HAR/data"
+TEST_ROOT  = "/kaggle/working/data/small_model_track_test"
+TEST_CSV   = "/kaggle/working/data/test.csv"
+OUTPUT_DIR = "/kaggle/working"
+
 print(f"Device: {DEVICE}")
-print(f"Train root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
-print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
 
 
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  CELL 3 of 9: Extract training data from zip volumes        ║
-# ║  Run once — takes ~5 min, skip if already extracted         ║
+# ║  CELL 3 of 9: Download & extract data from HuggingFace       ║
+# ║  Run once — takes ~20 min, skip if already done              ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import zipfile
+from huggingface_hub import hf_hub_download
 
-def merge_and_extract_zip_volumes(data_dir, output_name="HAR_full.zip", extract_to=None):
-    """Merge HAR.z01..HAR.z08 + HAR.zip and extract. Handles Kaggle's split zip format."""
-    z01_path = f"{data_dir}/HAR.z01"
-    zip_path = f"{data_dir}/HAR.zip"
-    merged_path = f"/kaggle/working/{output_name}"
+HF_REPO = "Kevin-Pal/CUHK-X_Small_Model_Track"
+DATA_DIR = "/kaggle/working/data"
 
-    if not os.path.isfile(z01_path) and not os.path.isfile(zip_path):
-        print(f"No zip volumes found at {data_dir}/HAR.z01 or HAR.zip")
-        print("Training data may already be extracted or in a different location.")
-        return False
+# ── Download training zip volumes (9 files, ~41.5 GB total) ──
+TRAIN_VOLUMES = [f"HAR.z0{i}" for i in range(1, 9)] + ["HAR.zip"]
+TRAIN_SUBDIR = "Small-Model-Track/Training/data"
 
-    if os.path.isdir(f"{data_dir}/HAR/data"):
-        print("Training data already extracted: HAR/data/ exists ✓")
-        return True
+if os.path.isdir(f"{DATA_DIR}/HAR/data"):
+    print("Training data already extracted ✓")
+else:
+    print(f"Downloading {len(TRAIN_VOLUMES)} training volumes to {DATA_DIR}/ ...")
+    for i, vol in enumerate(TRAIN_VOLUMES):
+        remote_path = f"{TRAIN_SUBDIR}/{vol}"
+        local_path = f"{DATA_DIR}/{vol}"
+        if not os.path.isfile(local_path):
+            print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] Downloading {vol} ...")
+            hf_hub_download(HF_REPO, filename=remote_path, repo_type="dataset",
+                           local_dir=DATA_DIR, local_dir_use_symlinks=False)
+            print(f"    Done ({os.path.getsize(local_path)/1024**3:.1f} GB)")
+        else:
+            print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] {vol} already downloaded ✓")
 
-    print("Merging zip volumes (HAR.z01..HAR.zip)...")
-    with open(merged_path, "wb") as out:
-        for i in range(1, 9):
-            part = f"{data_dir}/HAR.z0{i}"
-            if os.path.isfile(part):
-                print(f"  Reading {os.path.basename(part)} ({os.path.getsize(part)/1024**3:.1f} GB)")
-                with open(part, "rb") as f:
+    # Merge all volumes into one zip, then extract
+    merged = f"{DATA_DIR}/HAR_full.zip"
+    if not os.path.isfile(merged):
+        print("Merging volumes...")
+        with open(merged, "wb") as out:
+            for vol in TRAIN_VOLUMES:
+                with open(f"{DATA_DIR}/{vol}", "rb") as f:
                     out.write(f.read())
-        # Finally HAR.zip (central directory)
-        if os.path.isfile(zip_path):
-            print(f"  Reading HAR.zip ({os.path.getsize(zip_path)/1024**3:.1f} GB)")
-            with open(zip_path, "rb") as f:
-                out.write(f.read())
+        print(f"Merged: {os.path.getsize(merged)/1024**3:.1f} GB")
 
-    print(f"Merged: {merged_path} ({os.path.getsize(merged_path)/1024**3:.1f} GB)")
+        print("Extracting...")
+        with zipfile.ZipFile(merged) as zf:
+            zf.extractall(DATA_DIR)
+        os.remove(merged)
+        print("Extraction complete ✓")
+    else:
+        print("Already merged ✓")
 
-    if extract_to is None:
-        extract_to = data_dir  # extract next to zip volumes
-    print(f"Extracting to {extract_to} ...")
-    os.makedirs(extract_to, exist_ok=True)
-    with zipfile.ZipFile(merged_path) as zf:
-        zf.extractall(extract_to)
+TRAIN_ROOT = f"{DATA_DIR}/HAR/data"
 
-    # Clean up merged file to save space
-    os.remove(merged_path)
-    print("Extraction complete! Removed merged zip to save space.")
-    return True
+# ── Download test data ──
+TEST_SUBDIR = "Small-Model-Track/Testing/data"
+TEST_ZIP = "small_model_track_test.zip"
 
+if os.path.isdir(f"{DATA_DIR}/small_model_track_test"):
+    print("Test data already extracted ✓")
+else:
+    print(f"Downloading test data...")
+    hf_hub_download(HF_REPO, filename=f"{TEST_SUBDIR}/{TEST_ZIP}", repo_type="dataset",
+                   local_dir=DATA_DIR, local_dir_use_symlinks=False)
+    with zipfile.ZipFile(f"{DATA_DIR}/{TEST_ZIP}") as zf:
+        zf.extractall(DATA_DIR)
+    os.remove(f"{DATA_DIR}/{TEST_ZIP}")
+    print("Test extraction complete ✓")
 
-# Extract test data zip if needed
-test_zip = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test.zip"
-if os.path.isfile(test_zip) and not os.path.isdir(TEST_ROOT):
-    print("Extracting test data...")
-    with zipfile.ZipFile(test_zip) as zf:
-        zf.extractall(f"{KAGGLE_INPUT}/Testing/data/")
-    print("Test extraction complete.")
+TEST_ROOT = f"{DATA_DIR}/small_model_track_test"
 
-# Extract training data
-merge_and_extract_zip_volumes(TRAIN_DATA_DIR)
+# ── Download test.csv ──
+TEST_CSV_SUBDIR = "Small-Model-Track/Testing/test_file"
+if not os.path.isfile(f"{DATA_DIR}/test.csv"):
+    hf_hub_download(HF_REPO, filename=f"{TEST_CSV_SUBDIR}/test.csv", repo_type="dataset",
+                   local_dir=DATA_DIR, local_dir_use_symlinks=False)
+TEST_CSV = f"{DATA_DIR}/test.csv"
 
-print(f"\nTrain root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
+OUTPUT_DIR = "/kaggle/working"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# ── Verify ──
+print(f"\n── Data status ──")
+print(f"Train root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
 print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
+print(f"Test CSV:   {TEST_CSV}    exists={os.path.isfile(TEST_CSV)}")
+
+if os.path.isdir(TRAIN_ROOT):
+    mods = [d for d in os.listdir(TRAIN_ROOT) if os.path.isdir(os.path.join(TRAIN_ROOT, d))]
+    print(f"Training modalities: {mods}")
+if os.path.isdir(TEST_ROOT):
+    samples = len([d for d in os.listdir(TEST_ROOT) if d.startswith("SM_test")])
+    print(f"Test samples: {samples}")
 
 if not os.path.isdir(TRAIN_ROOT):
-    print("\n⚠️  TRAINING DATA NOT FOUND! Listing what's available:")
-    for root, dirs, files in os.walk(TRAIN_DATA_DIR):
-        level = root.replace(TRAIN_DATA_DIR, "").count(os.sep)
-        indent = "  " * level
-        print(f"{indent}{os.path.basename(root)}/")
-        if level > 2:
-            break
-        for d in dirs[:5]:
-            print(f"{indent}  {d}/")
-        for f in files[:5]:
-            sz = os.path.getsize(os.path.join(root, f)) / 1024**3
-            print(f"{indent}  {f} ({sz:.1f} GB)")
+    raise SystemExit("Training data download failed. Check your internet connection and retry.")
 
 
 
