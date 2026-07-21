@@ -70,30 +70,82 @@ print(f"Device: {DEVICE}")
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║  CELL 3 of 9: Download & extract data from HuggingFace       ║
+# ║  🔑 SET YOUR HF TOKEN BELOW (get it from hf.co/settings/tokens)║
 # ║  Run once — takes ~20 min, skip if already done              ║
 # ╚══════════════════════════════════════════════════════════════╝
 
 import zipfile
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, login
 
+# ── 🔑 SET YOUR HUGGINGFACE TOKEN HERE ──
+# Get it from: https://huggingface.co/settings/tokens
+# You need a token with READ access to gated datasets.
+# Or set it as a Kaggle secret named "HF_TOKEN" and use:
+#   from kaggle_secrets import UserSecretsClient
+#   HF_TOKEN = UserSecretsClient().get_secret("HF_TOKEN")
+HF_TOKEN = "hf_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"  # <-- REPLACE THIS
+
+# ── Paths ──
 HF_REPO = "Kevin-Pal/CUHK-X_Small_Model_Track"
 DATA_DIR = "/kaggle/working/data"
-
-# ── Download training zip volumes (9 files, ~41.5 GB total) ──
 TRAIN_VOLUMES = [f"HAR.z0{i}" for i in range(1, 9)] + ["HAR.zip"]
 TRAIN_SUBDIR = "Small-Model-Track/Training/data"
 
-if os.path.isdir(f"{DATA_DIR}/HAR/data"):
-    print("Training data already extracted ✓")
-else:
-    print(f"Downloading {len(TRAIN_VOLUMES)} training volumes to {DATA_DIR}/ ...")
+# ── Check if Kaggle already mounted the data (fallback) ──
+KAGGLE_MOUNTED_TRAIN = None
+KAGGLE_MOUNTED_TEST = None
+KAGGLE_MOUNTED_CSV = None
+
+for kaggle_dir in [
+    "/kaggle/input/cuhk-x-competition-small-model-track",
+    "/kaggle/input/competitions/cuhk-x-competition-small-model-track",
+]:
+    if os.path.isdir(kaggle_dir):
+        # Search for pre-extracted training data
+        for root, dirs, files in os.walk(kaggle_dir):
+            if os.path.basename(root) == "data" and any(d in dirs for d in ["Depth_Color", "Skeleton"]):
+                KAGGLE_MOUNTED_TRAIN = root
+            if "small_model_track_test" in dirs:
+                KAGGLE_MOUNTED_TEST = os.path.join(root, "small_model_track_test")
+            if "test.csv" in files:
+                KAGGLE_MOUNTED_CSV = os.path.join(root, "test.csv")
+        # Also check for zip volumes
+        for root, dirs, files in os.walk(kaggle_dir):
+            if any(f.startswith("HAR.z0") for f in files):
+                TRAIN_DATA_KAGGLE = root
+                print(f"Found Kaggle-mounted zip volumes at: {root}")
+                # Copy zip volumes to DATA_DIR instead of downloading
+                os.makedirs(DATA_DIR, exist_ok=True)
+                for vol in TRAIN_VOLUMES:
+                    src = os.path.join(root, vol)
+                    dst = os.path.join(DATA_DIR, vol)
+                    if os.path.isfile(src) and not os.path.isfile(dst):
+                        print(f"  Copying {vol} from Kaggle input...")
+                        import shutil
+                        shutil.copy2(src, dst)
+                break
+        break
+
+if KAGGLE_MOUNTED_TRAIN:
+    TRAIN_ROOT = KAGGLE_MOUNTED_TRAIN
+    print(f"Using Kaggle-mounted training data: {TRAIN_ROOT}")
+if KAGGLE_MOUNTED_TEST:
+    TEST_ROOT = KAGGLE_MOUNTED_TEST
+    print(f"Using Kaggle-mounted test data: {TEST_ROOT}")
+if KAGGLE_MOUNTED_CSV:
+    TEST_CSV = KAGGLE_MOUNTED_CSV
+    print(f"Using Kaggle-mounted test.csv: {TEST_CSV}")
+
+# ── If data not mounted, download from HuggingFace ──
+if not os.path.isdir(f"{DATA_DIR}/HAR/data") and KAGGLE_MOUNTED_TRAIN is None:
+    print(f"\nDownloading {len(TRAIN_VOLUMES)} training volumes (~41.5 GB)...")
     for i, vol in enumerate(TRAIN_VOLUMES):
         remote_path = f"{TRAIN_SUBDIR}/{vol}"
         local_path = f"{DATA_DIR}/{vol}"
         if not os.path.isfile(local_path):
             print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] Downloading {vol} ...")
             hf_hub_download(HF_REPO, filename=remote_path, repo_type="dataset",
-                           local_dir=DATA_DIR, local_dir_use_symlinks=False)
+                           token=HF_TOKEN, local_dir=DATA_DIR)
             print(f"    Done ({os.path.getsize(local_path)/1024**3:.1f} GB)")
         else:
             print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] {vol} already downloaded ✓")
@@ -116,31 +168,33 @@ else:
     else:
         print("Already merged ✓")
 
-TRAIN_ROOT = f"{DATA_DIR}/HAR/data"
+    TRAIN_ROOT = f"{DATA_DIR}/HAR/data"
 
 # ── Download test data ──
 TEST_SUBDIR = "Small-Model-Track/Testing/data"
 TEST_ZIP = "small_model_track_test.zip"
 
-if os.path.isdir(f"{DATA_DIR}/small_model_track_test"):
-    print("Test data already extracted ✓")
-else:
-    print(f"Downloading test data...")
-    hf_hub_download(HF_REPO, filename=f"{TEST_SUBDIR}/{TEST_ZIP}", repo_type="dataset",
-                   local_dir=DATA_DIR, local_dir_use_symlinks=False)
-    with zipfile.ZipFile(f"{DATA_DIR}/{TEST_ZIP}") as zf:
-        zf.extractall(DATA_DIR)
-    os.remove(f"{DATA_DIR}/{TEST_ZIP}")
-    print("Test extraction complete ✓")
+if KAGGLE_MOUNTED_TEST is None:
+    if os.path.isdir(f"{DATA_DIR}/small_model_track_test"):
+        print("Test data already extracted ✓")
+    else:
+        print("Downloading test data...")
+        hf_hub_download(HF_REPO, filename=f"{TEST_SUBDIR}/{TEST_ZIP}", repo_type="dataset",
+                       token=HF_TOKEN, local_dir=DATA_DIR)
+        with zipfile.ZipFile(f"{DATA_DIR}/{TEST_ZIP}") as zf:
+            zf.extractall(DATA_DIR)
+        os.remove(f"{DATA_DIR}/{TEST_ZIP}")
+        print("Test extraction complete ✓")
 
-TEST_ROOT = f"{DATA_DIR}/small_model_track_test"
+    TEST_ROOT = f"{DATA_DIR}/small_model_track_test"
 
 # ── Download test.csv ──
 TEST_CSV_SUBDIR = "Small-Model-Track/Testing/test_file"
-if not os.path.isfile(f"{DATA_DIR}/test.csv"):
-    hf_hub_download(HF_REPO, filename=f"{TEST_CSV_SUBDIR}/test.csv", repo_type="dataset",
-                   local_dir=DATA_DIR, local_dir_use_symlinks=False)
-TEST_CSV = f"{DATA_DIR}/test.csv"
+if KAGGLE_MOUNTED_CSV is None:
+    if not os.path.isfile(f"{DATA_DIR}/test.csv"):
+        hf_hub_download(HF_REPO, filename=f"{TEST_CSV_SUBDIR}/test.csv", repo_type="dataset",
+                       token=HF_TOKEN, local_dir=DATA_DIR)
+    TEST_CSV = f"{DATA_DIR}/test.csv"
 
 OUTPUT_DIR = "/kaggle/working"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -155,11 +209,19 @@ if os.path.isdir(TRAIN_ROOT):
     mods = [d for d in os.listdir(TRAIN_ROOT) if os.path.isdir(os.path.join(TRAIN_ROOT, d))]
     print(f"Training modalities: {mods}")
 if os.path.isdir(TEST_ROOT):
-    samples = len([d for d in os.listdir(TEST_ROOT) if d.startswith("SM_test")])
-    print(f"Test samples: {samples}")
+    try:
+        samples = len([d for d in os.listdir(TEST_ROOT) if d.startswith("SM_test")])
+        print(f"Test samples: {samples}")
+    except:
+        pass
 
 if not os.path.isdir(TRAIN_ROOT):
-    raise SystemExit("Training data download failed. Check your internet connection and retry.")
+    raise SystemExit(
+        "\n❌ Training data not found!\n"
+        "Options:\n"
+        "  1. Set your HF_TOKEN above (get it from https://huggingface.co/settings/tokens)\n"
+        "  2. On Kaggle: add data via Notebook sidebar → Data → Add Input → CUHK-X Small Model Track\n"
+    )
 
 
 
