@@ -33,11 +33,54 @@ from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader, Dataset
 
 # ── Paths (Kaggle auto-mounts the competition data) ──
-KAGGLE_INPUT  = "/kaggle/input/competitions/cuhk-x-competition-small-model-track"
-TRAIN_ROOT    = f"{KAGGLE_INPUT}/Training/data/HAR/data"   # extracted training data
-TEST_ROOT     = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test"
-TEST_CSV      = f"{KAGGLE_INPUT}/Testing/test_file/test.csv"
-OUTPUT_DIR    = "/kaggle/working"
+# On Kaggle, competitions mount directly under /kaggle/input/<competition-name>/
+# The directory name may vary — auto-detect it below.
+import glob as _glob
+
+def _find_kaggle_input():
+    """Auto-detect the Kaggle competition input directory."""
+    for pattern in [
+        "/kaggle/input/cuhk-x-competition-small-model-track",
+        "/kaggle/input/competitions/cuhk-x-competition-small-model-track",
+    ]:
+        if os.path.isdir(pattern):
+            return pattern
+    # Fallback: search
+    for d in _glob.glob("/kaggle/input/*"):
+        if "cuhk" in d.lower() or "small" in d.lower():
+            return d
+    return None
+
+KAGGLE_INPUT = _find_kaggle_input()
+if KAGGLE_INPUT is None:
+    print("WARNING: Could not auto-detect Kaggle input. Listing /kaggle/input/:")
+    for d in sorted(os.listdir("/kaggle/input/") if os.path.exists("/kaggle/input/") else []):
+        print(f"  {d}")
+        sub = os.path.join("/kaggle/input", d)
+        if os.path.isdir(sub):
+            for f in sorted(os.listdir(sub))[:10]:
+                print(f"    {f}")
+    raise SystemExit("Set KAGGLE_INPUT manually above.")
+
+print(f"KAGGLE_INPUT = {KAGGLE_INPUT}")
+
+# Training data paths — Kaggle provides split zip volumes that need merging
+TRAIN_DATA_DIR = f"{KAGGLE_INPUT}/Training/data"
+TRAIN_ROOT     = f"{TRAIN_DATA_DIR}/HAR/data"  # after extraction
+
+# Test data — Kaggle usually pre-extracts the zip
+TEST_ROOT = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test"
+TEST_CSV  = f"{KAGGLE_INPUT}/Testing/test_file/test.csv"
+OUTPUT_DIR = "/kaggle/working"
+
+# Quick check — list what's available
+print(f"\nContents of {TRAIN_DATA_DIR}:")
+if os.path.isdir(TRAIN_DATA_DIR):
+    for f in sorted(os.listdir(TRAIN_DATA_DIR))[:15]:
+        sz = os.path.getsize(f"{TRAIN_DATA_DIR}/{f}") / (1024**3) if os.path.isfile(f"{TRAIN_DATA_DIR}/{f}") else 0
+        print(f"  {f}{'  ' if os.path.isdir(f'{TRAIN_DATA_DIR}/{f}') else f'  ({sz:.1f} GB)'}")
+else:
+    print("  NOT FOUND — check KAGGLE_INPUT above")
 
 # ── Hyperparameters ──
 NUM_CLASSES   = 40
@@ -60,6 +103,86 @@ SENSOR_ORDER   = ["WTC", "WTRA", "WTLA", "WTLL", "WTRL"]
 print(f"Device: {DEVICE}")
 print(f"Train root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
 print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
+
+
+# ──────────────────────────────────────────────
+# CELL 2.5: Extract training data from zip volumes (run once, takes ~5 min)
+# ──────────────────────────────────────────────
+
+import zipfile
+
+def merge_and_extract_zip_volumes(data_dir, output_name="HAR_full.zip", extract_to=None):
+    """Merge HAR.z01..HAR.z08 + HAR.zip and extract. Handles Kaggle's split zip format."""
+    z01_path = f"{data_dir}/HAR.z01"
+    zip_path = f"{data_dir}/HAR.zip"
+    merged_path = f"/kaggle/working/{output_name}"
+
+    if not os.path.isfile(z01_path) and not os.path.isfile(zip_path):
+        print(f"No zip volumes found at {data_dir}/HAR.z01 or HAR.zip")
+        print("Training data may already be extracted or in a different location.")
+        return False
+
+    if os.path.isdir(f"{data_dir}/HAR/data"):
+        print("Training data already extracted: HAR/data/ exists ✓")
+        return True
+
+    print("Merging zip volumes (HAR.z01..HAR.zip)...")
+    with open(merged_path, "wb") as out:
+        for i in range(1, 9):
+            part = f"{data_dir}/HAR.z0{i}"
+            if os.path.isfile(part):
+                print(f"  Reading {os.path.basename(part)} ({os.path.getsize(part)/1024**3:.1f} GB)")
+                with open(part, "rb") as f:
+                    out.write(f.read())
+        # Finally HAR.zip (central directory)
+        if os.path.isfile(zip_path):
+            print(f"  Reading HAR.zip ({os.path.getsize(zip_path)/1024**3:.1f} GB)")
+            with open(zip_path, "rb") as f:
+                out.write(f.read())
+
+    print(f"Merged: {merged_path} ({os.path.getsize(merged_path)/1024**3:.1f} GB)")
+
+    if extract_to is None:
+        extract_to = data_dir  # extract next to zip volumes
+    print(f"Extracting to {extract_to} ...")
+    os.makedirs(extract_to, exist_ok=True)
+    with zipfile.ZipFile(merged_path) as zf:
+        zf.extractall(extract_to)
+
+    # Clean up merged file to save space
+    os.remove(merged_path)
+    print("Extraction complete! Removed merged zip to save space.")
+    return True
+
+
+# Extract test data zip if needed
+test_zip = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test.zip"
+if os.path.isfile(test_zip) and not os.path.isdir(TEST_ROOT):
+    print("Extracting test data...")
+    with zipfile.ZipFile(test_zip) as zf:
+        zf.extractall(f"{KAGGLE_INPUT}/Testing/data/")
+    print("Test extraction complete.")
+
+# Extract training data
+merge_and_extract_zip_volumes(TRAIN_DATA_DIR)
+
+print(f"\nTrain root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
+print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
+
+if not os.path.isdir(TRAIN_ROOT):
+    print("\n⚠️  TRAINING DATA NOT FOUND! Listing what's available:")
+    for root, dirs, files in os.walk(TRAIN_DATA_DIR):
+        level = root.replace(TRAIN_DATA_DIR, "").count(os.sep)
+        indent = "  " * level
+        print(f"{indent}{os.path.basename(root)}/")
+        if level > 2:
+            break
+        for d in dirs[:5]:
+            print(f"{indent}  {d}/")
+        for f in files[:5]:
+            sz = os.path.getsize(os.path.join(root, f)) / 1024**3
+            print(f"{indent}  {f} ({sz:.1f} GB)")
+
 
 
 # ──────────────────────────────────────────────
@@ -578,6 +701,27 @@ def generate_submission(checkpoint_path, test_root, test_csv, output_csv="submis
 # CELL 8: Generate submission (pick the best fold)
 # ──────────────────────────────────────────────
 
-# Find the best checkpoint and generate submission
-# checkpoint = f"{OUTPUT_DIR}/best_fold0.pth"  # or pick the fold with best val acc
-# generate_submission(checkpoint, TEST_ROOT, TEST_CSV, "/kaggle/working/submission.csv")
+import glob
+
+# Find all fold checkpoints and pick the one with best val_acc
+checkpoints = sorted(glob.glob(f"{OUTPUT_DIR}/best_fold*.pth"))
+if not checkpoints:
+    print("ERROR: No checkpoints found! Did training complete?")
+    print(f"Looking in: {OUTPUT_DIR}")
+    print(f"Contents: {os.listdir(OUTPUT_DIR) if os.path.exists(OUTPUT_DIR) else 'dir not found'}")
+else:
+    best_ckpt = None
+    best_acc = -1
+    for ckpt_path in checkpoints:
+        ckpt = torch.load(ckpt_path, map_location="cpu")
+        acc = ckpt.get("val_acc", 0)
+        print(f"  {os.path.basename(ckpt_path)}: val_acc={acc:.4f}")
+        if acc > best_acc:
+            best_acc = acc
+            best_ckpt = ckpt_path
+
+    print(f"\nBest checkpoint: {os.path.basename(best_ckpt)} (val_acc={best_acc:.4f})")
+    print("Running inference on 405 test clips...")
+    output = generate_submission(best_ckpt, TEST_ROOT, TEST_CSV, "/kaggle/working/submission.csv")
+    print(f"\n✅ Done! Download '{output}' and submit at:")
+    print("   https://www.kaggle.com/competitions/cuhk-x-competition-small-model-track/submit")
