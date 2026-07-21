@@ -33,6 +33,7 @@ from torch.utils.data import DataLoader, Dataset
 # On Kaggle, competitions mount directly under /kaggle/input/<competition-name>/
 # The directory name may vary — auto-detect it below.
 import glob as _glob
+import subprocess
 
 def _find_kaggle_input():
     """Auto-detect the Kaggle competition input directory."""
@@ -42,42 +43,104 @@ def _find_kaggle_input():
     ]:
         if os.path.isdir(pattern):
             return pattern
-    # Fallback: search
     for d in _glob.glob("/kaggle/input/*"):
         if "cuhk" in d.lower() or "small" in d.lower():
             return d
     return None
 
+def _find_files_recursive(base_dir, pattern, max_depth=5):
+    """Walk directory tree to find files matching pattern."""
+    matches = []
+    for root, dirs, files in os.walk(base_dir):
+        depth = root.replace(base_dir, "").count(os.sep)
+        if depth > max_depth:
+            dirs.clear()  # don't go deeper
+            continue
+        for f in files:
+            if pattern in f or f.endswith(pattern):
+                matches.append(os.path.join(root, f))
+    return sorted(matches)
+
+# ── Phase 1: Find Kaggle input ──
 KAGGLE_INPUT = _find_kaggle_input()
 if KAGGLE_INPUT is None:
-    print("WARNING: Could not auto-detect Kaggle input. Listing /kaggle/input/:")
-    for d in sorted(os.listdir("/kaggle/input/") if os.path.exists("/kaggle/input/") else []):
-        print(f"  {d}")
-        sub = os.path.join("/kaggle/input", d)
-        if os.path.isdir(sub):
-            for f in sorted(os.listdir(sub))[:10]:
-                print(f"    {f}")
-    raise SystemExit("Set KAGGLE_INPUT manually above.")
-
+    raise SystemExit(
+        "Cannot find CUHK-X data. Is this notebook attached to the competition?\n"
+        "Go to: Notebook sidebar → Data → Add Input → Competitions → CUHK-X Small Model Track"
+    )
 print(f"KAGGLE_INPUT = {KAGGLE_INPUT}")
 
-# Training data paths — Kaggle provides split zip volumes that need merging
-TRAIN_DATA_DIR = f"{KAGGLE_INPUT}/Training/data"
-TRAIN_ROOT     = f"{TRAIN_DATA_DIR}/HAR/data"  # after extraction
+# ── Phase 2: Show everything in the input directory ──
+print(f"\nFull directory tree of {KAGGLE_INPUT}:")
+# Use `tree` if available, else manual listing
+try:
+    subprocess.run(["tree", "-L", "3", "--du", "-h", KAGGLE_INPUT], timeout=10)
+except:
+    def _show_tree(path, prefix="", max_depth=3):
+        if max_depth <= 0: return
+        try:
+            entries = sorted(os.listdir(path))
+        except PermissionError:
+            return
+        for i, e in enumerate(entries):
+            full = os.path.join(path, e)
+            is_last = (i == len(entries)-1)
+            marker = "└── " if is_last else "├── "
+            if os.path.isdir(full):
+                try: sz = sum(os.path.getsize(os.path.join(dp, f)) for dp, _, files in os.walk(full) for f in files) / 1e9
+                except: sz = 0
+                print(f"{prefix}{marker}{e}/ ({sz:.1f} GB)")
+                _show_tree(full, prefix + ("    " if is_last else "│   "), max_depth-1)
+            else:
+                sz = os.path.getsize(full) / 1e9
+                print(f"{prefix}{marker}{e} ({sz:.1f} GB)")
+    _show_tree(KAGGLE_INPUT)
 
-# Test data — Kaggle usually pre-extracts the zip
-TEST_ROOT = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test"
-TEST_CSV  = f"{KAGGLE_INPUT}/Testing/test_file/test.csv"
-OUTPUT_DIR = "/kaggle/working"
+# ── Phase 3: Find zip volumes, test data, and test CSV ──
+print("\n── Searching for data files ──")
 
-# Quick check — list what's available
-print(f"\nContents of {TRAIN_DATA_DIR}:")
-if os.path.isdir(TRAIN_DATA_DIR):
-    for f in sorted(os.listdir(TRAIN_DATA_DIR))[:15]:
-        sz = os.path.getsize(f"{TRAIN_DATA_DIR}/{f}") / (1024**3) if os.path.isfile(f"{TRAIN_DATA_DIR}/{f}") else 0
-        print(f"  {f}{'  ' if os.path.isdir(f'{TRAIN_DATA_DIR}/{f}') else f'  ({sz:.1f} GB)'}")
+HAR_ZIPS = [f for f in _find_files_recursive(KAGGLE_INPUT, "HAR.z")
+            if f.endswith(('.z01','.z02','.z03','.z04','.z05','.z06','.z07','.z08','.zip'))]
+# Also include the final HAR.zip
+har_zip = _find_files_recursive(KAGGLE_INPUT, "HAR.zip")
+HAR_ZIPS = sorted(set(HAR_ZIPS + har_zip))
+
+if HAR_ZIPS:
+    TRAIN_DATA_DIR = os.path.dirname(HAR_ZIPS[0])
+    print(f"Found {len(HAR_ZIPS)} training zip volumes in: {TRAIN_DATA_DIR}")
 else:
-    print("  NOT FOUND — check KAGGLE_INPUT above")
+    TRAIN_DATA_DIR = f"{KAGGLE_INPUT}/Training/data"
+    print(f"No zip volumes found, assuming: {TRAIN_DATA_DIR}")
+
+TRAIN_ROOT = f"{TRAIN_DATA_DIR}/HAR/data"  # after extraction
+
+# Find test data
+test_zips = _find_files_recursive(KAGGLE_INPUT, "small_model_track_test")
+test_dirs = [d for d in test_zips if os.path.isdir(d)]
+test_zips = [d for d in test_zips if d.endswith('.zip')]
+
+if test_dirs:
+    TEST_ROOT = test_dirs[0]
+    print(f"Found pre-extracted test dir: {TEST_ROOT}")
+elif test_zips:
+    TEST_ROOT = os.path.join(os.path.dirname(test_zips[0]), "small_model_track_test")
+    print(f"Found test zip: {test_zips[0]} → will extract to {TEST_ROOT}")
+else:
+    TEST_ROOT = f"{KAGGLE_INPUT}/Testing/data/small_model_track_test"
+    print(f"No test data found, assuming: {TEST_ROOT}")
+
+# Find test.csv
+test_csvs = _find_files_recursive(KAGGLE_INPUT, "test.csv")
+if test_csvs:
+    # prefer the one in Testing/test_file/
+    preferred = [c for c in test_csvs if "Testing" in c or "test_file" in c]
+    TEST_CSV = (preferred or test_csvs)[0]
+    print(f"Found test.csv at: {TEST_CSV}")
+else:
+    TEST_CSV = f"{KAGGLE_INPUT}/Testing/test_file/test.csv"
+    print(f"No test.csv found, assuming: {TEST_CSV}")
+
+OUTPUT_DIR = "/kaggle/working"
 
 # ── Hyperparameters ──
 NUM_CLASSES   = 40
@@ -660,7 +723,12 @@ def train_model(data_root, output_dir=OUTPUT_DIR, epochs=EPOCHS):
 # ╚══════════════════════════════════════════════════════════════╝
 
 # Run training on all 6 folds
-train_model(TRAIN_ROOT)
+if not os.path.isdir(TRAIN_ROOT):
+    print(f"\n❌ Training data NOT found at: {TRAIN_ROOT}")
+    print("Did you run Cell 3 (extraction) yet?")
+    print("If extraction completed but path is wrong, set TRAIN_ROOT manually above.")
+else:
+    train_model(TRAIN_ROOT)
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -707,6 +775,7 @@ if not checkpoints:
     print("ERROR: No checkpoints found! Did training complete?")
     print(f"Looking in: {OUTPUT_DIR}")
     print(f"Contents: {os.listdir(OUTPUT_DIR) if os.path.exists(OUTPUT_DIR) else 'dir not found'}")
+    print("\nMake sure Cell 7 (training) ran successfully first.")
 else:
     best_ckpt = None
     best_acc = -1
