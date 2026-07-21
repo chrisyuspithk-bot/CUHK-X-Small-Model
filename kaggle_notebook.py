@@ -144,8 +144,13 @@ if not os.path.isdir(f"{DATA_DIR}/HAR/data") and KAGGLE_MOUNTED_TRAIN is None:
         local_path = f"{DATA_DIR}/{vol}"
         if not os.path.isfile(local_path):
             print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] Downloading {vol} ...")
-            hf_hub_download(HF_REPO, filename=remote_path, repo_type="dataset",
-                           token=HF_TOKEN, local_dir=DATA_DIR)
+            # hf_hub_download mirrors the repo structure — find where it landed
+            downloaded = hf_hub_download(HF_REPO, filename=remote_path, repo_type="dataset",
+                                        token=HF_TOKEN, local_dir=DATA_DIR)
+            # Move to flat DATA_DIR if it landed in a subdirectory
+            if downloaded != local_path and os.path.isfile(downloaded):
+                import shutil
+                shutil.move(downloaded, local_path)
             print(f"    Done ({os.path.getsize(local_path)/1024**3:.1f} GB)")
         else:
             print(f"  [{i+1}/{len(TRAIN_VOLUMES)}] {vol} already downloaded ✓")
@@ -179,11 +184,15 @@ if KAGGLE_MOUNTED_TEST is None:
         print("Test data already extracted ✓")
     else:
         print("Downloading test data...")
-        hf_hub_download(HF_REPO, filename=f"{TEST_SUBDIR}/{TEST_ZIP}", repo_type="dataset",
-                       token=HF_TOKEN, local_dir=DATA_DIR)
-        with zipfile.ZipFile(f"{DATA_DIR}/{TEST_ZIP}") as zf:
+        test_zip_local = f"{DATA_DIR}/{TEST_ZIP}"
+        downloaded = hf_hub_download(HF_REPO, filename=f"{TEST_SUBDIR}/{TEST_ZIP}", repo_type="dataset",
+                                    token=HF_TOKEN, local_dir=DATA_DIR)
+        if downloaded != test_zip_local and os.path.isfile(downloaded):
+            import shutil
+            shutil.move(downloaded, test_zip_local)
+        with zipfile.ZipFile(test_zip_local) as zf:
             zf.extractall(DATA_DIR)
-        os.remove(f"{DATA_DIR}/{TEST_ZIP}")
+        os.remove(test_zip_local)
         print("Test extraction complete ✓")
 
     TEST_ROOT = f"{DATA_DIR}/small_model_track_test"
@@ -192,8 +201,12 @@ if KAGGLE_MOUNTED_TEST is None:
 TEST_CSV_SUBDIR = "Small-Model-Track/Testing/test_file"
 if KAGGLE_MOUNTED_CSV is None:
     if not os.path.isfile(f"{DATA_DIR}/test.csv"):
-        hf_hub_download(HF_REPO, filename=f"{TEST_CSV_SUBDIR}/test.csv", repo_type="dataset",
-                       token=HF_TOKEN, local_dir=DATA_DIR)
+        csv_local = f"{DATA_DIR}/test.csv"
+        downloaded = hf_hub_download(HF_REPO, filename=f"{TEST_CSV_SUBDIR}/test.csv", repo_type="dataset",
+                                    token=HF_TOKEN, local_dir=DATA_DIR)
+        if downloaded != csv_local and os.path.isfile(downloaded):
+            import shutil
+            shutil.move(downloaded, csv_local)
     TEST_CSV = f"{DATA_DIR}/test.csv"
 
 OUTPUT_DIR = "/kaggle/working"
