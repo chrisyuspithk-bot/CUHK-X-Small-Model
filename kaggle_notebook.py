@@ -195,10 +195,13 @@ OUTPUT_DIR = "/kaggle/working"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # ── Verify ──
+import shutil as _shutil
+disk = _shutil.disk_usage("/kaggle/working")
 print(f"\n── Data status ──")
 print(f"Train root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
 print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
 print(f"Test CSV:   {TEST_CSV}    exists={os.path.isfile(TEST_CSV)}")
+print(f"Free disk:  {disk.free / 1024**3:.1f} GB / {disk.total / 1024**3:.1f} GB total")
 
 if os.path.isdir(TRAIN_ROOT):
     mods = [d for d in os.listdir(TRAIN_ROOT) if os.path.isdir(os.path.join(TRAIN_ROOT, d))]
