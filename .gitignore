@@ -1,0 +1,9 @@
+data/
+output/
+__pycache__/
+*.pyc
+.DS_Store
+.agent_tmp/
+*.pth
+*.zip
+*.z0*
