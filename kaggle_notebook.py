@@ -1,20 +1,17 @@
 """
 CUHK-X Small Model Track — Kaggle Training & Inference Notebook
 
-Upload this as a Kaggle Notebook. The dataset is auto-mounted at:
-  /kaggle/input/competitions/cuhk-x-competition-small-model-track/
-
-Run all cells in order: Install → Train → Infer → Submit
+Copy each CELL into a separate Kaggle notebook cell and run in order.
 """
 
-# ──────────────────────────────────────────────
-# CELL 1: Install dependencies (run once)
-# ──────────────────────────────────────────────
-# !pip install -q torch torchvision numpy pandas scikit-learn Pillow tqdm
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 1 of 9: Install dependencies                          ║
+# ╚══════════════════════════════════════════════════════════════╝
+!pip install -q torch torchvision numpy pandas scikit-learn Pillow tqdm
 
-# ──────────────────────────────────────────────
-# CELL 2: Imports & Constants
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 2 of 9: Imports, paths, hyperparameters               ║
+# ╚══════════════════════════════════════════════════════════════╝
 import csv
 import json
 import os
@@ -105,9 +102,10 @@ print(f"Train root: {TRAIN_ROOT}  exists={os.path.isdir(TRAIN_ROOT)}")
 print(f"Test root:  {TEST_ROOT}   exists={os.path.isdir(TEST_ROOT)}")
 
 
-# ──────────────────────────────────────────────
-# CELL 2.5: Extract training data from zip volumes (run once, takes ~5 min)
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 3 of 9: Extract training data from zip volumes        ║
+# ║  Run once — takes ~5 min, skip if already extracted         ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 import zipfile
 
@@ -185,9 +183,9 @@ if not os.path.isdir(TRAIN_ROOT):
 
 
 
-# ──────────────────────────────────────────────
-# CELL 3: Dataset & Preprocessing
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 4 of 9: Dataset & Preprocessing                      ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 def _resize_frame(img, size=IMG_SIZE):
     w, h = img.size
@@ -432,9 +430,9 @@ def collate_fn(batch):
     return result
 
 
-# ──────────────────────────────────────────────
-# CELL 4: Model Architecture
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 5 of 9: Model Architecture                            ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 class SkeletonEncoder(nn.Module):
     def __init__(self, in_c=17, out_dim=EMBED_DIM):
@@ -571,9 +569,9 @@ class CUHKXModel(nn.Module):
         return self.count_params() * 4 / (1024**2)
 
 
-# ──────────────────────────────────────────────
-# CELL 5: Training
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 6 of 9: Training functions                            ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 def train_epoch(model, loader, crit, opt, device):
     model.train()
@@ -657,17 +655,17 @@ def train_model(data_root, output_dir=OUTPUT_DIR, epochs=EPOCHS):
     return best_accs
 
 
-# ──────────────────────────────────────────────
-# CELL 6: Run Training
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 7 of 9: Run Training (6-fold CV, ~30 min/fold GPU)   ║
+# ╚══════════════════════════════════════════════════════════════╝
 
-if __name__ == "__main__" or True:
-    train_model(TRAIN_ROOT)
+# Run training on all 6 folds
+train_model(TRAIN_ROOT)
 
 
-# ──────────────────────────────────────────────
-# CELL 7: Inference & Submission
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 8 of 9: Inference function                            ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 @torch.no_grad()
 def generate_submission(checkpoint_path, test_root, test_csv, output_csv="submission.csv"):
@@ -697,9 +695,9 @@ def generate_submission(checkpoint_path, test_root, test_csv, output_csv="submis
     return output_csv
 
 
-# ──────────────────────────────────────────────
-# CELL 8: Generate submission (pick the best fold)
-# ──────────────────────────────────────────────
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  CELL 9 of 9: Generate submission.csv                       ║
+# ╚══════════════════════════════════════════════════════════════╝
 
 import glob
 
